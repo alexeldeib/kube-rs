@@ -1,5 +1,6 @@
 use crate::{
-    api::{Api, ListParams, Meta, WatchEvent},
+    api::{ListParams, Meta, Resource, WatchEvent},
+    client::Client,
     Result,
 };
 
@@ -24,24 +25,20 @@ use std::{sync::Arc, time::Duration};
 /// Because of https://github.com/clux/kube-rs/issues/219 we recommend you use this
 /// with kubernetes >= 1.16 and watch bookmarks enabled.
 #[derive(Clone)]
-pub struct Informer<K>
-where
-    K: Clone + DeserializeOwned + Meta,
-{
+pub struct Informer {
+    client: Client,
+    resource: Resource,
     version: Arc<Mutex<String>>,
-    api: Api<K>,
     params: ListParams,
     needs_resync: Arc<Mutex<bool>>,
 }
 
-impl<K> Informer<K>
-where
-    K: Clone + DeserializeOwned + Meta,
-{
+impl Informer {
     /// Create an informer on an api resource
-    pub fn new(api: Api<K>) -> Self {
+    pub fn new<K>(client: Client, resource: Resource) -> Self {
         Informer {
-            api,
+            client,
+            resource,
             params: ListParams::default(),
             version: Arc::new(Mutex::new(0.to_string())),
             needs_resync: Arc::new(Mutex::new(false)),
@@ -62,7 +59,7 @@ where
     /// Controllers/finalizers/ownerReferences are the preferred ways
     /// to garbage collect related resources.
     pub fn set_version(self, v: String) -> Self {
-        debug!("Setting Informer version for {} to {}", self.api.resource.kind, v);
+        debug!("Setting Informer version for {} to {}", self.resource.kind, v);
 
         // We need to block on this as our mutex needs go be async compatible
         futures::executor::block_on(async {
@@ -95,8 +92,11 @@ where
     /// If we are desynced we force a 10s wait 10s before starting the poll.
     ///
     /// If you need to track the `resourceVersion` you can use `Informer::version()`.
-    pub async fn poll(&self) -> Result<impl Stream<Item = Result<WatchEvent<K>>>> {
-        trace!("Watching {}", self.api.resource.kind);
+    pub async fn poll<K>(&self) -> Result<impl Stream<Item = Result<WatchEvent<K>>>>
+    where
+        K: Clone + DeserializeOwned + Meta,
+    {
+        trace!("Watching {}", self.resource.kind);
 
         // First check if we need to backoff or reset our resourceVersion from last time
         {
@@ -119,7 +119,8 @@ where
 
         // Start watching from our previous watch point
         let resource_version = self.version.lock().await.clone();
-        let stream = self.api.watch(&self.params, &resource_version).await?;
+        let req = self.resource.watch(&self.params, &resource_version)?;
+        let stream = self.client.request_events::<K>(req).await?;
 
         // Intercept stream elements to update internal resourceVersion
         let newstream = stream.then(move |event| {

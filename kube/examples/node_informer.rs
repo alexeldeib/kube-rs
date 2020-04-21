@@ -2,7 +2,7 @@
 use futures::{StreamExt, TryStreamExt};
 use k8s_openapi::api::core::v1::{Event, Node};
 use kube::{
-    api::{Api, ListParams, Meta, WatchEvent},
+    api::{ListParams, Meta, Resource, WatchEvent},
     runtime::Informer,
     Client,
 };
@@ -12,23 +12,23 @@ async fn main() -> anyhow::Result<()> {
     std::env::set_var("RUST_LOG", "info,node_informer=debug,kube=debug");
     env_logger::init();
     let client = Client::try_default().await?;
-    let events: Api<Event> = Api::all(client.clone());
-    let nodes: Api<Node> = Api::all(client.clone());
+    let events = Resource::all::<Event>();
+    let nodes = Resource::all::<Node>();
 
     let lp = ListParams::default().labels("beta.kubernetes.io/os=linux");
-    let ni = Informer::new(nodes).params(lp);
+    let ni = Informer::new::<Node>(client.clone(), nodes).params(lp);
 
     loop {
         let mut nodes = ni.poll().await?.boxed();
 
         while let Some(ne) = nodes.try_next().await? {
-            handle_nodes(&events, ne).await?;
+            handle_nodes(&client, &events, ne).await?;
         }
     }
 }
 
 // This function lets the app handle an event from kube
-async fn handle_nodes(events: &Api<Event>, ne: WatchEvent<Node>) -> anyhow::Result<()> {
+async fn handle_nodes(client: &Client, events: &Resource, ne: WatchEvent<Node>) -> anyhow::Result<()> {
     match ne {
         WatchEvent::Added(o) => {
             info!("New Node: {}", o.spec.unwrap().provider_id.unwrap());
@@ -55,8 +55,10 @@ async fn handle_nodes(events: &Api<Event>, ne: WatchEvent<Node>) -> anyhow::Resu
                 // Find events related to this node
                 let opts = ListParams::default()
                     .fields(&format!("involvedObject.kind=Node,involvedObject.name={}", name));
-                let evlist = events.list(&opts).await?;
-                for e in evlist {
+
+                let req = events.list(&opts)?;
+                let evlist = client.request::<Event>(req).await;
+                if let Ok(e) = evlist {
                     warn!("Node event: {:?}", serde_json::to_string_pretty(&e)?);
                 }
             } else {

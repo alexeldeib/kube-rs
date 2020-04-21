@@ -1,7 +1,7 @@
 #[macro_use] extern crate log;
 use k8s_openapi::api::core::v1::Event;
 use kube::{
-    api::{Api, ListParams, WatchEvent},
+    api::{ListParams, Resource, WatchEvent},
     runtime::Informer,
     Client,
 };
@@ -14,9 +14,9 @@ async fn main() -> anyhow::Result<()> {
     env_logger::init();
     let client = Client::try_default().await?;
 
-    let events: Api<Event> = Api::all(client);
+    let events = Resource::all::<Event>();
     let lp = ListParams::default();
-    let ei = Informer::new(events).params(lp);
+    let ei = Informer::new::<Event>(client, events).params(lp);
 
     loop {
         let mut events = ei.poll().await?.boxed();

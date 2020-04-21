@@ -10,7 +10,7 @@
 //!
 //! ```rust,no_run
 //! use futures::{StreamExt, TryStreamExt};
-//! use kube::api::{Api, ListParams, PostParams, WatchEvent};
+//! use kube::api::{Resource, ListParams, PostParams, WatchEvent};
 //! use kube::Client;
 //! use kube::runtime::Informer;
 //! use k8s_openapi::api::core::v1::Pod;
@@ -24,7 +24,7 @@
 //!
 //!     // Get a strongly typed handle to the Kubernetes API for interacting
 //!     // with pods in the "default" namespace.
-//!     let pods: Api<Pod> = Api::namespaced(kube_client, "default");
+//!     let pods = Resource::namespaced::<Pod>("default");
 //!
 //!     // Create a pod from JSON
 //!     let pod = serde_json::from_value(serde_json::json!({
@@ -44,17 +44,19 @@
 //!     }))?;
 //!
 //!     // Create the pod
-//!     let pod = pods.create(&PostParams::default(), &pod).await?;
+//!     let bytes = serde_json::to_vec(&pod)?;
+//!     let request = pods.create(&PostParams::default(), bytes)?;    
+//!     let pod = kube_client.request::<Pod>(request).await?;
 //!
 //!     // Create an informer for watching events about
-//!     let informer = Informer::new(pods).params(
+//!     let informer = Informer::new::<Pod>(kube_client, pods).params(
 //!         ListParams::default()
 //!             .fields("metadata.name=my-container")
 //!             .timeout(10),
 //!     );
 //!
 //!     // Get an event stream from the informer
-//!     let mut events_stream = informer.poll().await?.boxed();
+//!     let mut events_stream = informer.poll::<Pod>().await?.boxed();
 //!
 //!     // Keep getting events from the events stream
 //!     while let Some(event) = events_stream.try_next().await? {
